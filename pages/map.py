@@ -61,74 +61,58 @@ def get_coordinates_from_address(address):
         return None, None
 
 # Map Visualization Function
-def display_map(pickup_lon, pickup_lat, dropoff_lon, dropoff_lat):
+def display_map(pickup_lon=None, pickup_lat=None, dropoff_lon=None, dropoff_lat=None, focus_on_newyork=True):
     """
     Displays a map with pickup and dropoff markers using Pydeck.
     """
-    if pickup_lon is None or pickup_lat is None or dropoff_lon is None or dropoff_lat is None:
-      return
-
     if not MAPBOX_TOKEN:
         st.error("Mapbox token not provided. Please add it to the script.")
         return
 
-    view_state = pdk.ViewState(
-        latitude=(pickup_lat + dropoff_lat) / 2,
-        longitude=(pickup_lon + dropoff_lon) / 2,
-        zoom=11,
-        pitch=50,
-    )
+    if focus_on_newyork:
+        initial_view_state = pdk.ViewState(
+            latitude=40.7128,  # New York latitude
+            longitude=-74.0060,  # New York longitude
+            zoom=10,
+            pitch=50,
+        )
+    elif pickup_lon is not None and pickup_lat is not None and dropoff_lon is not None and dropoff_lat is not None:
+        initial_view_state = pdk.ViewState(
+            latitude=(pickup_lat + dropoff_lat) / 2,
+            longitude=(pickup_lon + dropoff_lon) / 2,
+            zoom=11,
+            pitch=50,
+        )
+    else:
+        st.error("please inter a valid address")
+        return
 
-    data = [
-        {"lon": pickup_lon, "lat": pickup_lat, "type": "Pickup"},
-        {"lon": dropoff_lon, "lat": dropoff_lat, "type": "Dropoff"},
-    ]
+    layers = []
+    if pickup_lon is not None and pickup_lat is not None and dropoff_lon is not None and dropoff_lat is not None:
+        data = [
+            {"lon": pickup_lon, "lat": pickup_lat, "type": "Pickup"},
+            {"lon": dropoff_lon, "lat": dropoff_lat, "type": "Dropoff"},
+        ]
 
-    layer = pdk.Layer(
-        "ScatterplotLayer",
-        data,
-        get_position=["lon", "lat"],
-        get_color="[200, 30, 0, 160]",
-        get_radius=100,
-    )
+        layer = pdk.Layer(
+            "ScatterplotLayer",
+            data,
+            get_position=["lon", "lat"],
+            get_color="[200, 30, 0, 160]",
+            get_radius=100,
+        )
+        layers.append(layer)
 
     tool_tip = {"html": "Location: <b>{type}</b>"}
 
     deck = pdk.Deck(
         map_style="mapbox://styles/mapbox/streets-v11",
-        initial_view_state=view_state,
-        layers=[layer],
+        initial_view_state=initial_view_state,
+        layers=layers,
         tooltip=tool_tip,
         api_keys={"mapbox": MAPBOX_TOKEN},
     )
-    st.pydeck_chart(deck)
-
-
-# User inputs in Column 1
-with col1:
-    d = st.date_input("When do you want to go?", value=None)
-    t = st.time_input("Set a time for the ride", value=None)
-
-    pickup_address = st.text_input("Enter Pickup Address:", key="pickup")
-    if pickup_address:
-        plong, plat = get_coordinates_from_address(pickup_address)
-        if plong and plat:
-            st.write(f"Pickup Coordinates: Longitude: {plong:.6f}, Latitude: {plat:.6f}")
-        else:
-            plong = None
-            plat = None
-
-    dropoff_address = st.text_input("Enter Dropoff Address:", key="dropoff")
-    if dropoff_address:
-        dlong, dlat = get_coordinates_from_address(dropoff_address)
-        if dlong and dlat:
-            st.write(f"Dropoff Coordinates: Longitude: {dlong:.6f}, Latitude: {dlat:.6f}")
-        else:
-            dlong = None
-            dlat = None
-    passenger_count = st.number_input(
-        "Number of Passengers:", min_value=1, max_value=8, step=1, value=2
-    )
+    return deck
 
 # Function to call the API
 def predict(
@@ -157,18 +141,62 @@ def predict(
     else:
         return f"Error: {response.status_code}"
 
+# Initialize map in session state
+if "map_deck" not in st.session_state:
+    st.session_state.map_deck = display_map(focus_on_newyork=True)
+
 # Convert date and time inputs to a proper datetime string
-if d and t:
-    pickup_datetime = f"{d} {t}"  # Format: YYYY-MM-DD HH:MM:SS
-else:
-    pickup_datetime = None
+def format_datetime(date, time):
+    if date and time:
+      return datetime.datetime.combine(date, time).strftime("%Y-%m-%d %H:%M:%S")
+    return None
+
+# User inputs in Column 1
+with col1:
+    d = st.date_input("When do you want to go?", value=None)
+    t = st.time_input("Set a time for the ride", value=None)
+
+    pickup_address = st.text_input("Enter Pickup Address:", key="pickup")
+    if pickup_address:
+        plong, plat = get_coordinates_from_address(pickup_address)
+        plong, plat = abs(plong), abs(plat)
+        if plong and plat:
+            st.write(f"Pickup Coordinates: Longitude: {plong:.6f}, Latitude: {plat:.6f}")
+        else:
+            plong = None
+            plat = None
+    else:
+      plong = None
+      plat = None
+
+    dropoff_address = st.text_input("Enter Dropoff Address:", key="dropoff")
+    if dropoff_address:
+        dlong, dlat = get_coordinates_from_address(dropoff_address)
+        dlong, dlat = abs(dlong), abs(dlat)
+        if dlong and dlat:
+            st.write(f"Dropoff Coordinates: Longitude: {dlong:.6f}, Latitude: {dlat:.6f}")
+        else:
+            dlong = None
+            dlat = None
+    else:
+      dlong = None
+      dlat = None
+
+    passenger_count = st.number_input(
+        "Number of Passengers:", min_value=1, max_value=8, step=1, value=2
+    )
 
 # User inputs in Column 2
 with col2:
     # Logo
     st.image("taxi_image.png")
+
+    # Display the map
+    st.pydeck_chart(st.session_state.map_deck)
+
     # Predict button
     if st.button("Predict Fare"):
+        pickup_datetime=format_datetime(d,t)
         if pickup_datetime and plong and plat and dlong and dlat:
             fare = predict(
                 pickup_datetime=pickup_datetime,
@@ -179,7 +207,16 @@ with col2:
                 passenger_count=passenger_count,
             )
             st.write(f"Your Estimated Fare is: ${fare}")
-            display_map(plong, plat, dlong, dlat)
+            st.session_state.map_deck = display_map(plong, plat, dlong, dlat, focus_on_newyork=False)
+            #st.experimental_rerun()  # Remove this line
+
+            # Update the map
+            st.pydeck_chart(st.session_state.map_deck)
 
         else:
             st.write("Please enter a valid date, time, pickup and dropoff location.")
+            st.session_state.map_deck = display_map(focus_on_newyork=True)
+            #st.experimental_rerun()# Remove this line
+
+            # Update the map
+            st.pydeck_chart(st.session_state.map_deck)
